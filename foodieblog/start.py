@@ -197,7 +197,7 @@ def save_picture(form_picture):
     return picture_fn
 
 
-@app.route("/account", methods=['GET', 'POST'])
+@app.route("/account", methods=['GET', 'POST', 'DELETE'])
 @login_required
 def account():
     form = UpdateAccountForm()
@@ -215,22 +215,21 @@ def account():
         form.email.data = current_user.email
     image_file = url_for('static', filename='profile_pics/' + current_user.image_file)
 
+
     return render_template('account.html', title='Account',
                            image_file=image_file, form=form )
 
 
 
 
-
-
-@app.route('/account/delete/<id>', methods=["DELETE"])
+@app.route('/users/<id>', methods=['DELETE', 'GET'] )
 def delete_user(id):
-    user = User.query.filter_by(id)
+    user1 = User.query.filter_by().first()
 
     try:
-        db.session.delete(user)
+        db.session.delete(user1)
         db.session.commit()
-        return redirect('/account')
+        return redirect('/login')
     except:
         return 'There was a problem deleting that task'
 
