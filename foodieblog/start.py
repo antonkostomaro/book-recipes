@@ -7,12 +7,12 @@ from flask_admin import Admin
 from flask_admin.contrib.sqla import ModelView
 import sqlalchemy
 from flask_wtf.file import FileField, FileAllowed
-from wtforms import StringField, PasswordField, SubmitField, BooleanField
+from wtforms import StringField, PasswordField, SubmitField, BooleanField, TextAreaField
 from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError
 import os
 import secrets
 from PIL import Image
-from flask_wtf import FlaskForm
+from flask_wtf import FlaskForm, Form
 from flask_bcrypt import Bcrypt
 from sqlalchemy import delete
 
@@ -34,39 +34,31 @@ login_manager.login_message_category = 'info'
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-class Posts(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(255))
-    subtitle = db.Column(db.String(255))
-    content = db.Column(db.Text)
-    author = db.Column(db.String(255))
-    date_posted = db.Column(db.DateTime)
-    slug = db.Column(db.String(255))
-
-
-
-class Todo(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    content = db.Column(db.String(20000), nullable=False)
-    date_created = db.Column(db.DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return '<Task %r>' % self.id
-
-
-
 class User(db.Model, UserMixin):
-    __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(20), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     image_file = db.Column(db.String(20), nullable=False, default='default.jpg')
     password = db.Column(db.String(60), nullable=False)
-   # posts = db.relationship('Post', backref='author', lazy=True)
+    posts = db.relationship('Post', backref='author', lazy=True)
     deleted = db.Column(db.Boolean(), default=False)
 
     def __repr__(self):
         return f"User('{self.username}', '{self.email}', '{self.image_file}')"
+
+
+class Post(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(100), nullable=False)
+    date_posted = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    content = db.Column(db.Text, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+    def __repr__(self):
+        return f"Post('{self.title}', '{self.date_posted}')"
+
+
+
 
 db.create_all()
 
@@ -90,6 +82,10 @@ class RegistrationForm(FlaskForm):
         if user:
             raise ValidationError('That email is taken. Please choose a different one.')
 
+class PostForm(FlaskForm):
+    title = StringField('Title', validators=[DataRequired()])
+    content = TextAreaField('Content', validators=[DataRequired()])
+    submit = SubmitField('Post')
 
 class LoginForm(FlaskForm):
     email = StringField('Email',
@@ -120,6 +116,8 @@ class UpdateAccountForm(FlaskForm):
                 raise ValidationError('Это email принято. Пожалуйста, выберите другой.')
 
 
+
+
 class SecureModelView(ModelView):
     def is_accessible(self):
         if "logged_in" in session:
@@ -130,14 +128,11 @@ class SecureModelView(ModelView):
 
 
 
-#admin.add_view(SecureModelView(Posts, db.session))
 
 
 
 
 
-
-db.create_all()
 
 @app.route("/register", methods=['GET', 'POST'])
 def register():
@@ -157,7 +152,8 @@ def register():
 @app.route("/")
 @app.route("/home")
 def home():
-    return render_template('home.html')
+    posts = Post.query.all()
+    return render_template('home.html', posts=posts)
 
 
 
@@ -222,6 +218,9 @@ def account():
 
 
 
+
+
+
 @app.route('/users/<id>', methods=['DELETE', 'GET'] )
 def delete_user(id):
     user1 = User.query.filter_by().first()
@@ -229,7 +228,7 @@ def delete_user(id):
     try:
         db.session.delete(user1)
         db.session.commit()
-        return redirect('/login')
+        return redirect('/login', id=id)
     except:
         return 'There was a problem deleting that task'
 
@@ -237,81 +236,74 @@ def delete_user(id):
 
 
 """
-@app.route('/delete/<int:id>', methods=["DELETE", "POST"])
-def delete_user(id):
-    task_to_delete = User.query.filter_by(id)
-
-    try:
-        db.session.delete(task_to_delete)
-        db.session.commit()
-        return redirect('/delete.html')
-    except:
-        return 'There was a problem deleting that task'
-"""
-
-
-
-
-@app.route("/post/<string:slug>")
-def post(slug):
-    try:
-        post = Posts.query.filter_by(slug=slug).one()
-        return render_template("post.html", post=post)
-    except sqlalchemy.orm.exc.NoResultFound:
-        abort(404)
-
-@app.route('/pos.html', methods=['POST', 'GET'])
-def pos():
-    if request.method == 'POST':
-        task_content = request.form['content']
-        new_task = Todo(content=task_content)
-
-        try:
-            db.session.add(new_task)
-            db.session.commit()
-            return redirect('pos.html')
-        except:
-            return 'There was an issue adding your task'
-
-    else:
-        tasks = Todo.query.order_by(Todo.date_created).all()
-        return render_template('/pos.html', tasks=tasks)
-
-
-@app.route('/delete/<int:id>')
+@app.route('/delete/<id>')
 def delete(id):
-    task_to_delete = Todo.query.get_or_404(id)
 
-    try:
-        db.session.delete(task_to_delete)
-        db.session.commit()
-        return redirect('/pos.html')
+server = UcxServer.query.filter_by(id=int(id)).first_or_404()
+try:
+  db.session.delete(server)
+  db.session.commit()
+  flash('Successfully deleted the {} server'.format(server))
+  return redirect(url_for('servers.index'))
     except:
         return 'There was a problem deleting that task'
-
-@app.route('/update/<int:id>', methods=['GET', 'POST'])
-def update(id):
-    task = Todo.query.get_or_404(id)
-
-    if request.method == 'POST':
-        task.content = request.form['content']
-
-        try:
-            db.session.commit()
-            return redirect('/pos.html')
-        except:
-            return 'There was an issue updating your task'
-
-    else:
-        return render_template('update.html', task=task)
+"""
 
 
 
+@app.route("/post/new", methods=['GET', 'POST'])
+@login_required
+def new_post():
+    form = PostForm()
+    if form.validate_on_submit():
+        post = Post(title=form.title.data, content=form.content.data, author=current_user)
+        db.session.add(post)
+        db.session.commit()
+        flash('Your post has been created!', 'success')
+        return redirect(url_for('home'))
+    return render_template('create_post.html', title='New Post',
+                           form=form, legend='New Post')
 
-@app.route('/new1.html')
-def new():
-    posts = Posts.query.all()
-    return render_template('new1.html', posts=posts)
+
+@app.route("/post/<int:post_id>")
+def post(post_id):
+    post = Post.query.get_or_404(post_id)
+    return render_template('post.html', title=post.title, post=post)
+
+
+@app.route("/post/<int:post_id>/update", methods=['GET', 'POST'])
+@login_required
+def update_post(post_id):
+    post = Post.query.get_or_404(post_id)
+    if post.author != current_user:
+        abort(403)
+    form = PostForm()
+    if form.validate_on_submit():
+        post.title = form.title.data
+        post.content = form.content.data
+        db.session.commit()
+        flash('Your post has been updated!', 'success')
+        return redirect(url_for('post', post_id=post.id))
+    elif request.method == 'GET':
+        form.title.data = post.title
+        form.content.data = post.content
+    return render_template('create_post.html', title='Update Post',
+                           form=form, legend='Update Post')
+
+
+@app.route("/post/<int:post_id>/delete", methods=['POST'])
+@login_required
+def delete_post(post_id):
+    post = Post.query.get_or_404(post_id)
+    if post.author != current_user:
+        abort(403)
+    db.session.delete(post)
+    db.session.commit()
+    flash('Your post has been deleted!', 'success')
+    return redirect(url_for('home'))
+
+
+
 
 @app.route('/about.html', methods=['GET'])
 @login_required
