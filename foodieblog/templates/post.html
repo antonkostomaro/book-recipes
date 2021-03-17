@@ -1,6 +1,12 @@
 {% extends "layout.html" %}
 {% block content %}
+<div class="media">
+
+        <div class="media-body">
+
   <article class="media content-section">
+        <img  src="{{ url_for('static', filename='profile_pics/' + post.photo) }}">
+
     <img class="rounded-circle article-img" src="{{ url_for('static', filename='profile_pics/' + post.author.image_file) }}">
     <div class="media-body">
       <div class="article-metadata">
@@ -16,6 +22,7 @@
       <h2 class="article-title">{{ post.title }}</h2>
       <p class="article-content">{{ post.content }}</p>
     </div>
+
   </article>
   <!-- Modal -->
   <div class="modal fade" id="deleteModal" tabindex="-1" role="dialog" aria-labelledby="deleteModalLabel" aria-hidden="true">
@@ -36,4 +43,7 @@
       </div>
     </div>
   </div>
+<body>
+    <img src="{{ user_image }}" alt="User Image">
+</body>
 {% endblock content %}

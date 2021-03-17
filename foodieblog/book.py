@@ -1,31 +1,18 @@
-'''
-class Message(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(1024), nullable=False)
+from flask import Flask, render_template
+import os
 
-    def __init__(self, text, tags):
-        self.text = text.strip()
-        self.tags = [
-            Tag(text=tag.strip()) for tag in tags.split(',')
-        ]
-'''
-'''
-class Tag(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    text = db.Column(db.String(32), nullable=False)
+PEOPLE_FOLDER = os.path.join('static', 'img')
 
-    message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
-    message = db.relationship('Message', backref=db.backref('tags', lazy=True))
-    
-    
-@app.route('/add_message', methods=['POST', 'GET'])
-def add_message():
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = PEOPLE_FOLDER
 
-    text = request.form['text']
-    tag = request.form['tag']
+@app.route('/')
+@app.route('/index')
+def show_index():
+    full_filename = os.path.join(app.config['UPLOAD_FOLDER'], 'typography.jpg')
+    return render_template("index.html", user_image = full_filename)
 
-    db.session.add('Message'(text, tag))
-    db.session.commit()
 
-    return redirect(url_for('main'))    
-'''
+
+if __name__ == "__main__":
+    app.run(debug=True)

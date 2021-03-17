@@ -1,20 +1,20 @@
 from flask import *
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, current_user, logout_user, login_required, UserMixin
-from werkzeug.security import check_password_hash, generate_password_hash
 from datetime import datetime
 from flask_admin import Admin
 from flask_admin.contrib.sqla import ModelView
-import sqlalchemy
-from flask_wtf.file import FileField, FileAllowed
-from wtforms import StringField, PasswordField, SubmitField, BooleanField, TextAreaField
+from flask_wtf.file import FileField, FileAllowed,  FileRequired
+from wtforms import StringField, PasswordField, SubmitField, BooleanField, TextAreaField, FileField
 from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError
 import os
 import secrets
 from PIL import Image
 from flask_wtf import FlaskForm, Form
 from flask_bcrypt import Bcrypt
-from sqlalchemy import delete
+from flask_uploads import configure_uploads, IMAGES, UploadSet
+from werkzeug.utils import secure_filename
+import imghdr
 
 
 app = Flask(__name__)
@@ -29,6 +29,13 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
+WTF_CSRF_SECRET_KEY  =  'kkkkfgfhfghdfsdf'
+images = UploadSet('images', IMAGES)
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
+app.config['UPLOAD_EXTENSIONS'] = ['.jpg', '.png', '.gif']
+app.config['UPLOAD_PATH'] = 'uploads'
+PEOPLE_FOLDER = os.path.join('static', 'img')
+app.config['UPLOAD_FOLDER'] = PEOPLE_FOLDER
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -53,9 +60,11 @@ class Post(db.Model):
     date_posted = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     content = db.Column(db.Text, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    photo = db.Column(db.String(20), nullable=False, default='typography.jpg')
+
 
     def __repr__(self):
-        return f"Post('{self.title}', '{self.date_posted}')"
+        return f"Post('{self.title}', '{self.date_posted}', '{self.photo}')"
 
 
 
@@ -85,6 +94,7 @@ class RegistrationForm(FlaskForm):
 class PostForm(FlaskForm):
     title = StringField('Title', validators=[DataRequired()])
     content = TextAreaField('Content', validators=[DataRequired()])
+    picture = FileField('Изменить изображение Поста', validators=[FileAllowed(['jpg', 'png'])])
     submit = SubmitField('Post')
 
 class LoginForm(FlaskForm):
@@ -93,6 +103,12 @@ class LoginForm(FlaskForm):
     password = PasswordField('Пароль', validators=[DataRequired()])
     remember = BooleanField('Запомнить Меня')
     submit = SubmitField('Войти')
+
+
+#class PhotoForm(FlaskForm):
+    #photo = FileField(validators=[FileRequired()])
+
+
 
 
 class UpdateAccountForm(FlaskForm):
@@ -118,6 +134,8 @@ class UpdateAccountForm(FlaskForm):
 
 
 
+
+
 class SecureModelView(ModelView):
     def is_accessible(self):
         if "logged_in" in session:
@@ -128,11 +146,20 @@ class SecureModelView(ModelView):
 
 
 
+'''
+@app.route('/upload', methods=['GET', 'POST'])
+def uploa11d():
+    form = PhotoForm()
+    if form.validate_on_submit():
+        f = form.photo.data
+        filename = secure_filename(f.filename)
+        f.save(os.path.join(
+            app.instance_path, 'photos', filename
+        ))
+        return redirect(url_for('index'))
 
-
-
-
-
+    return render_template('upload.html', form=form)
+'''
 
 @app.route("/register", methods=['GET', 'POST'])
 def register():
@@ -156,6 +183,10 @@ def home():
     return render_template('home.html', posts=posts)
 
 
+@app.route('/index')
+def post22():
+    full_filename = os.path.join(app.config['UPLOAD_FOLDER'], 'typography.jpg')
+    return render_template("index.html", user_image = full_filename)
 
 @app.route("/login", methods=['GET', 'POST'])
 def login():
@@ -193,6 +224,38 @@ def save_picture(form_picture):
     return picture_fn
 
 
+
+
+
+
+
+
+
+
+
+@app.route('/users/<id>', methods=['DELETE', 'GET'] )
+def delete_user(id):
+    user1 = User.query.filter_by().first()
+
+    try:
+        db.session.delete(user1)
+        db.session.commit()
+        return redirect('/login', id=id)
+    except:
+        return 'There was a problem deleting that task'
+
+
+
+@app.errorhandler(413)
+def too_large(e):
+    return "File is too large", 413
+
+
+@app.route('/uploads/<filename>')
+def upload(filename):
+    return send_from_directory(app.config['UPLOAD_PATH'], filename)
+
+
 @app.route("/account", methods=['GET', 'POST', 'DELETE'])
 @login_required
 def account():
@@ -216,58 +279,41 @@ def account():
                            image_file=image_file, form=form )
 
 
-
-
-
-
-
-@app.route('/users/<id>', methods=['DELETE', 'GET'] )
-def delete_user(id):
-    user1 = User.query.filter_by().first()
-
-    try:
-        db.session.delete(user1)
-        db.session.commit()
-        return redirect('/login', id=id)
-    except:
-        return 'There was a problem deleting that task'
-
-
-
-
-"""
-@app.route('/delete/<id>')
-def delete(id):
-
-server = UcxServer.query.filter_by(id=int(id)).first_or_404()
-try:
-  db.session.delete(server)
-  db.session.commit()
-  flash('Successfully deleted the {} server'.format(server))
-  return redirect(url_for('servers.index'))
-    except:
-        return 'There was a problem deleting that task'
-"""
-
-
-
 @app.route("/post/new", methods=['GET', 'POST'])
 @login_required
 def new_post():
     form = PostForm()
+
     if form.validate_on_submit():
+
         post = Post(title=form.title.data, content=form.content.data, author=current_user)
+        picture_file = save_picture(form.picture.data)
+        post.photo = picture_file
         db.session.add(post)
         db.session.commit()
         flash('Your post has been created!', 'success')
         return redirect(url_for('home'))
+    photo = url_for('static', filename='profile_pics/' + Post.photo)
     return render_template('create_post.html', title='New Post',
-                           form=form, legend='New Post')
+                           form=form, legend='New Post', photo=photo)
 
+
+app.route('/', methods=['POST'])
+def upload_files():
+    uploaded_file = request.files['file']
+    filename = secure_filename(uploaded_file.filename)
+    if filename != '':
+        file_ext = os.path.splitext(filename)[1]
+        if file_ext not in app.config['UPLOAD_EXTENSIONS'] or \
+                file_ext != validate_image(uploaded_file.stream):
+            return "Invalid image", 400
+        uploaded_file.save(os.path.join(app.config['UPLOAD_PATH'], filename))
+    return '', 204
 
 @app.route("/post/<int:post_id>")
 def post(post_id):
     post = Post.query.get_or_404(post_id)
+
     return render_template('post.html', title=post.title, post=post)
 
 
@@ -275,6 +321,12 @@ def post(post_id):
 @login_required
 def update_post(post_id):
     post = Post.query.get_or_404(post_id)
+    form = PostForm()
+    if form.validate_on_submit():
+        if form.picture.data:
+            picture_file = save_picture(form.picture.data)
+            post.photo = picture_file
+        db.session.commit()
     if post.author != current_user:
         abort(403)
     form = PostForm()
@@ -287,8 +339,9 @@ def update_post(post_id):
     elif request.method == 'GET':
         form.title.data = post.title
         form.content.data = post.content
+    photo = url_for('static', filename='profile_pics/' + post.photo)
     return render_template('create_post.html', title='Update Post',
-                           form=form, legend='Update Post')
+                           form=form, legend='Update Post', photo=photo)
 
 
 @app.route("/post/<int:post_id>/delete", methods=['POST'])
@@ -318,7 +371,13 @@ def main():
 
 
 
-
+def validate_image(stream):
+    header = stream.read(512)
+    stream.seek(0)
+    format = imghdr.what(None, header)
+    if not format:
+        return None
+    return '.' + (format if format != 'jpeg' else 'jpg')
 
 
 
