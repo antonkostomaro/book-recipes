@@ -8,22 +8,30 @@ from flask_wtf.file import FileField, FileAllowed,  FileRequired
 from wtforms import StringField, PasswordField, SubmitField, BooleanField, TextAreaField, FileField
 from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError
 import os
+from flask_bootstrap import Bootstrap
 import secrets
+import guess_language
+from flask_babel import _, lazy_gettext as _l, Babel, get_locale
 from PIL import Image
-from flask_wtf import FlaskForm, Form
+from flask_wtf import FlaskForm
 from flask_bcrypt import Bcrypt
-from flask_uploads import configure_uploads, IMAGES, UploadSet
+from flask_uploads import  IMAGES, UploadSet
 from werkzeug.utils import secure_filename
 import imghdr
-
+from flask_moment import Moment
+from flask_migrate import Migrate
+from config import Config
 
 app = Flask(__name__)
 app.secret_key = 'kkkkfgfhfghdfsdf'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgres://postgres:VikaPidosha00@localhost/blog'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+babel = Babel(app)
+migrate = Migrate(app, db)
 manager = LoginManager(app)
 admin = Admin(app)
+bootstrap = Bootstrap(app)
 bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -36,31 +44,70 @@ app.config['UPLOAD_EXTENSIONS'] = ['.jpg', '.png', '.gif']
 app.config['UPLOAD_PATH'] = 'uploads'
 PEOPLE_FOLDER = os.path.join('static', 'img')
 app.config['UPLOAD_FOLDER'] = PEOPLE_FOLDER
+moment = Moment(app)
+app.config.from_object(Config)
+POSTS_PER_PAGE = 25
+
 
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
 
+
+
+followers = db.Table('followers',
+    db.Column('follower_id', db.Integer, db.ForeignKey('user.id')),
+    db.Column('followed_id', db.Integer, db.ForeignKey('user.id'))
+)
+
+
 class User(db.Model, UserMixin):
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(20), unique=True, nullable=False)
+    username = db.Column(db.String(20), unique=True, nullable=False, index=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     image_file = db.Column(db.String(20), nullable=False, default='default.jpg')
     password = db.Column(db.String(60), nullable=False)
-    posts = db.relationship('Post', backref='author', lazy=True)
+    posts = db.relationship('Post', backref='author', lazy='dynamic')
     deleted = db.Column(db.Boolean(), default=False)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow)
+    about_me = db.Column(db.String(140))
+    followed = db.relationship(
+        'User', secondary=followers,
+        primaryjoin=(followers.c.follower_id == id),
+        secondaryjoin=(followers.c.followed_id == id),
+        backref=db.backref('followers', lazy='dynamic'), lazy='dynamic')
+
+    def follow(self, user):
+        if not self.is_following(user):
+            self.followed.append(user)
+
+    def unfollow(self, user):
+        if self.is_following(user):
+            self.followed.remove(user)
+
+    def is_following(self, user):
+        return self.followed.filter(
+            followers.c.followed_id == user.id).count() > 0
 
     def __repr__(self):
         return f"User('{self.username}', '{self.email}', '{self.image_file}')"
 
 
+    def followed_posts(self):
+        followed = Post.query.join(
+            followers, (followers.c.followed_id == Post.user_id)).filter(
+            followers.c.follower_id == self.id)
+        own = Post.query.filter_by(user_id=self.id)
+        return followed.union(own).order_by(Post.date_posted.desc())
 class Post(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String(100), nullable=False)
-    date_posted = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
-    content = db.Column(db.Text, nullable=False)
+    date_posted = db.Column(db.DateTime, nullable=True, index=True, default=datetime.utcnow)
+    content = db.Column(db.Text)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     photo = db.Column(db.String(20), nullable=False, default='typography.jpg')
+    language = db.Column(db.String(5))
+
 
 
     def __repr__(self):
@@ -70,6 +117,10 @@ class Post(db.Model):
 
 
 db.create_all()
+
+
+
+
 
 class RegistrationForm(FlaskForm):
     username = StringField('Username',
@@ -93,6 +144,7 @@ class RegistrationForm(FlaskForm):
 
 class PostForm(FlaskForm):
     title = StringField('Title', validators=[DataRequired()])
+    #post = TextAreaField(_l('Say something'), validators=[DataRequired()])
     content = TextAreaField('Content', validators=[DataRequired()])
     picture = FileField('Изменить изображение Поста', validators=[FileAllowed(['jpg', 'png'])])
     submit = SubmitField('Post')
@@ -105,8 +157,22 @@ class LoginForm(FlaskForm):
     submit = SubmitField('Войти')
 
 
-#class PhotoForm(FlaskForm):
-    #photo = FileField(validators=[FileRequired()])
+#*
+class EditProfileForm(FlaskForm):
+    username = StringField(_l('Username'), validators=[DataRequired()])
+    about_me = TextAreaField(_l('About me'),
+                             validators=[Length(min=0, max=140)])
+    submit = SubmitField(_l('Submit'))
+
+    def __init__(self, original_username, *args, **kwargs):
+        super(EditProfileForm, self).__init__(*args, **kwargs)
+        self.original_username = original_username
+
+    def validate_username(self, username):
+        if username.data != self.original_username:
+            user = User.query.filter_by(username=self.username.data).first()
+            if user is not None:
+                raise ValidationError(_('Please use a different username.'))
 
 
 
@@ -116,6 +182,7 @@ class UpdateAccountForm(FlaskForm):
                            validators=[DataRequired(), Length(min=2, max=20)])
     email = StringField('Email',
                         validators=[DataRequired(), Email()])
+
     picture = FileField('Изменить изображение профиля', validators=[FileAllowed(['jpg', 'png'])])
     submit = SubmitField('Обновить')
 
@@ -129,10 +196,11 @@ class UpdateAccountForm(FlaskForm):
         if email.data != current_user.email:
             user = User.query.filter_by(email=email.data).first()
             if user:
-                raise ValidationError('Это email принято. Пожалуйста, выберите другой.')
+                raise ValidationError('Это email занят. Пожалуйста, выберите другой.')
 
 
-
+class EmptyForm(FlaskForm):
+    submit = SubmitField('Submit')
 
 
 
@@ -143,23 +211,31 @@ class SecureModelView(ModelView):
         else:
             abort(403)
 
+def validate_image(stream):
+    header = stream.read(512)
+    stream.seek(0)
+    format = imghdr.what(None, header)
+    if not format:
+        return None
+    return '.' + (format if format != 'jpeg' else 'jpg')
 
 
+@app.route('/user/<username>')
+@login_required
+def user(username):
+    user = User.query.filter_by(username=username).first_or_404()
+    page = request.args.get('page', 1, type=int)
+    posts = user.posts.order_by(Post.date_posted.desc()).paginate(
+        page, app.config['POSTS_PER_PAGE'], False)
+    next_url = url_for('user', username=user.username, page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('user', username=user.username, page=posts.prev_num) \
+        if posts.has_prev else None
+    form = EmptyForm()
+    image_file = url_for('static', filename='profile_pics/' + current_user.image_file)
+    return render_template('user.html', user=user, posts=posts.items,
+                           next_url=next_url, prev_url=prev_url, form=form, image_file=image_file)
 
-'''
-@app.route('/upload', methods=['GET', 'POST'])
-def uploa11d():
-    form = PhotoForm()
-    if form.validate_on_submit():
-        f = form.photo.data
-        filename = secure_filename(f.filename)
-        f.save(os.path.join(
-            app.instance_path, 'photos', filename
-        ))
-        return redirect(url_for('index'))
-
-    return render_template('upload.html', form=form)
-'''
 
 @app.route("/register", methods=['GET', 'POST'])
 def register():
@@ -175,18 +251,113 @@ def register():
         return redirect(url_for('login'))
     return render_template('register.html', title='Register', form=form)
 
+@app.before_request
+def before_request():
+    if current_user.is_authenticated:
+        current_user.last_seen = datetime.utcnow()
+        db.session.commit()
+    g.locale = str(get_locale())
 
-@app.route("/")
 @app.route("/home")
 def home():
     posts = Post.query.all()
     return render_template('home.html', posts=posts)
 
+@app.route('/', methods=['GET', 'POST'])
+@app.route('/index', methods=['GET', 'POST'])
+@login_required
+def index():
+    form = PostForm()
+    if form.validate_on_submit():
+        language = guess_language(form.post.data)
+        if language == 'UNKNOWN' or len(language) > 5:
+            language = ''
+        post = Post(title=form.post.data, author=current_user,
+                    language=language)
+        db.session.add(post)
+        db.session.commit()
+        flash(_('Your post is now live!'))
+        return redirect(url_for('index'))
+    page = request.args.get('page', 1, type=int)
+    posts = current_user.followed_posts().paginate(
+        page, app.config['POSTS_PER_PAGE'] , False)
+    next_url = url_for('index', page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('index', page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template('index.html', title=_('Home'), form=form,
+                           posts=posts.items, next_url=next_url,
+                           prev_url=prev_url)
 
-@app.route('/index')
-def post22():
-    full_filename = os.path.join(app.config['UPLOAD_FOLDER'], 'typography.jpg')
-    return render_template("index.html", user_image = full_filename)
+@app.route('/explore')
+@login_required
+def explore():
+    page = request.args.get('page', 1, type=int)
+    posts = Post.query.order_by(Post.date_posted.desc()).paginate(
+        page, app.config['POSTS_PER_PAGE'], False)
+    next_url = url_for('explore', page=posts.next_num) \
+        if posts.has_next else None
+    prev_url = url_for('explore', page=posts.prev_num) \
+        if posts.has_prev else None
+    return render_template('index.html', title=_('Explore'),
+                           posts=posts.items, next_url=next_url,
+                           prev_url=prev_url)
+
+@app.route('/edit_profile', methods=['GET', 'POST'])
+@login_required
+def edit_profile():
+    form = EditProfileForm(current_user.username)
+    if form.validate_on_submit():
+        current_user.about_me = form.about_me.data
+        db.session.commit()
+        flash(('Ваш статус был обновлен!'))
+        return redirect(url_for('edit_profile'))
+    elif request.method == 'GET':
+        form.about_me.data = current_user.about_me
+    return render_template('edit_profile.html', title=_('Edit Profile'),
+                           form=form)
+
+
+
+@app.route('/follow/<username>', methods=['POST'])
+@login_required
+def follow(username):
+    form = EmptyForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            flash(_('User %(username)s not found.', username=username))
+            return redirect(url_for('index'))
+        if user == current_user:
+            flash(_('You cannot follow yourself!'))
+            return redirect(url_for('user', username=username))
+        current_user.follow(user)
+        db.session.commit()
+        flash(_('You are following %(username)s!', username=username))
+        return redirect(url_for('user', username=username))
+    else:
+        return redirect(url_for('index'))
+
+
+@app.route('/unfollow/<username>', methods=['POST'])
+@login_required
+def unfollow(username):
+    form = EmptyForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=username).first()
+        if user is None:
+            flash(_('User %(username)s not found.', username=username))
+            return redirect(url_for('index'))
+        if user == current_user:
+            flash(_('You cannot unfollow yourself!'))
+            return redirect(url_for('user', username=username))
+        current_user.unfollow(user)
+        db.session.commit()
+        flash(_('You are not following %(username)s.', username=username))
+        return redirect(url_for('user', username=username))
+    else:
+        return redirect(url_for('index'))
+
 
 @app.route("/login", methods=['GET', 'POST'])
 def login():
@@ -251,10 +422,6 @@ def too_large(e):
     return "File is too large", 413
 
 
-@app.route('/uploads/<filename>')
-def upload(filename):
-    return send_from_directory(app.config['UPLOAD_PATH'], filename)
-
 
 @app.route("/account", methods=['GET', 'POST', 'DELETE'])
 @login_required
@@ -298,17 +465,7 @@ def new_post():
                            form=form, legend='New Post', photo=photo)
 
 
-app.route('/', methods=['POST'])
-def upload_files():
-    uploaded_file = request.files['file']
-    filename = secure_filename(uploaded_file.filename)
-    if filename != '':
-        file_ext = os.path.splitext(filename)[1]
-        if file_ext not in app.config['UPLOAD_EXTENSIONS'] or \
-                file_ext != validate_image(uploaded_file.stream):
-            return "Invalid image", 400
-        uploaded_file.save(os.path.join(app.config['UPLOAD_PATH'], filename))
-    return '', 204
+
 
 @app.route("/post/<int:post_id>")
 def post(post_id):
@@ -358,29 +515,6 @@ def delete_post(post_id):
 
 
 
-@app.route('/about.html', methods=['GET'])
-@login_required
-def about():
-    return render_template('about.html')
-
-@app.route('/index.html', methods=['GET'])
-@login_required
-def main():
-    return render_template('index.html')
-
-
-
-
-def validate_image(stream):
-    header = stream.read(512)
-    stream.seek(0)
-    format = imghdr.what(None, header)
-    if not format:
-        return None
-    return '.' + (format if format != 'jpeg' else 'jpg')
-
-
-
 def save_picture(form_picture):
     random_hex = secrets.token_hex(8)
     _, f_ext = os.path.splitext(form_picture.filename)
@@ -404,3 +538,4 @@ def redirect_to_signin(response):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
