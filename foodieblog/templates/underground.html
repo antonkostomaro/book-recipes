@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+{% block content %}
+    <div class="container" id="home">
+        <h1 class="page-header">Your Underground Feed</h1>
+        <p class="page-header">These posts are only shared with Scurry Users</p>
+        <div class="posts-container">
+            {%  for post in posts.items %}
+                <article class="article-post shadow">
+                    <div class="post-head">
+                        <div class="post-metadata">
+                            <a class="post-author" href="{{ url_for('user_posts', username=post.author.username) }}">{{ post.author.username }}</a>
+                            <small>{{ post.date_posted.strftime('%Y-%m-%d') }}</small>
+
+
+                            </p>
+                            <a href="{{ url_for('share_post', post_id=post.id) }}" class="btn">
+                                <ion-icon name="share-alt"></ion-icon>
+                            </a>
+
+                        </div>
+                    </div>
+
+                    <div class="post-body">
+                        <p class="post-content">{{ post.content }}</p>
+                        <br>
+                        {% for shares in post.shares[-1:] | reverse %}
+                        Post Shared By: <a class="post-author" href="{{ url_for('user_posts', username=shares.sharer.username) }}">{{shares.sharer.username}}</a>
+
+
+                        {% endfor %}
+                        <div class="post-buttons">
+                            {% if current_user.username == post.author.username %}
+                                <a href="{{ url_for('update_post', post_id=post.id) }}" class="btn">Update</a>
+                                <a href="{{ url_for('delete_post', post_id=post.id) }}" class="btn">Delete</a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </article>
+            {% endfor %}
+    </div>
+{% endblock content %}

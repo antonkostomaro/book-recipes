@@ -1,26 +1,24 @@
 from flask import *
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, login_user, current_user, logout_user, login_required, UserMixin
-from datetime import datetime
-from flask_admin import Admin
-from flask_admin.contrib.sqla import ModelView
-from flask_wtf.file import FileField, FileAllowed,  FileRequired
+from flask_wtf.file import  FileAllowed
 from wtforms import StringField, PasswordField, SubmitField, BooleanField, TextAreaField, FileField
 from wtforms.validators import DataRequired, Length, Email, EqualTo, ValidationError
 import os
 from flask_bootstrap import Bootstrap
 import secrets
 import guess_language
-from flask_babel import _, lazy_gettext as _l, Babel, get_locale
+from flask_babel import _, lazy_gettext as _l, Babel
 from PIL import Image
 from flask_wtf import FlaskForm
 from flask_bcrypt import Bcrypt
 from flask_uploads import  IMAGES, UploadSet
-from werkzeug.utils import secure_filename
-import imghdr
 from flask_moment import Moment
 from flask_migrate import Migrate
-from config import Config
+from datetime import datetime
+
+
+
 
 app = Flask(__name__)
 app.secret_key = 'kkkkfgfhfghdfsdf'
@@ -30,23 +28,19 @@ db = SQLAlchemy(app)
 babel = Babel(app)
 migrate = Migrate(app, db)
 manager = LoginManager(app)
-admin = Admin(app)
 bootstrap = Bootstrap(app)
 bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
-
 WTF_CSRF_SECRET_KEY  =  'kkkkfgfhfghdfsdf'
 images = UploadSet('images', IMAGES)
 app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
 app.config['UPLOAD_EXTENSIONS'] = ['.jpg', '.png', '.gif']
-app.config['UPLOAD_PATH'] = 'uploads'
 PEOPLE_FOLDER = os.path.join('static', 'img')
-app.config['UPLOAD_FOLDER'] = PEOPLE_FOLDER
 moment = Moment(app)
-app.config.from_object(Config)
 POSTS_PER_PAGE = 25
+
 
 
 @login_manager.user_loader
@@ -71,23 +65,45 @@ class User(db.Model, UserMixin):
     deleted = db.Column(db.Boolean(), default=False)
     last_seen = db.Column(db.DateTime, default=datetime.utcnow)
     about_me = db.Column(db.String(140))
+    repost = db.Column(db.Integer)
     followed = db.relationship(
         'User', secondary=followers,
         primaryjoin=(followers.c.follower_id == id),
         secondaryjoin=(followers.c.followed_id == id),
         backref=db.backref('followers', lazy='dynamic'), lazy='dynamic')
+    shared = db.relationship(
+        'PostShare',
+        foreign_keys='PostShare.sharer_id',
+        backref='sharer', lazy='dynamic')
+
+
+    def share_post(self, post):
+        if not self.has_shared_post(post):
+            share = PostShare(sharer_id=self.id, shared_post_id=post.id)
+            db.session.add(share)
+            db.session.commit()
+
+
+    def has_shared_post(self, post):
+        return PostShare.query.filter(
+            PostShare.sharer_id == self.id,
+            PostShare.shared_post_id == post.id).count() > 0
+
 
     def follow(self, user):
         if not self.is_following(user):
             self.followed.append(user)
 
+
     def unfollow(self, user):
         if self.is_following(user):
             self.followed.remove(user)
 
+
     def is_following(self, user):
         return self.followed.filter(
             followers.c.followed_id == user.id).count() > 0
+
 
     def __repr__(self):
         return f"User('{self.username}', '{self.email}', '{self.image_file}')"
@@ -99,27 +115,31 @@ class User(db.Model, UserMixin):
             followers.c.follower_id == self.id)
         own = Post.query.filter_by(user_id=self.id)
         return followed.union(own).order_by(Post.date_posted.desc())
+
+
+class PostShare(db.Model):
+    __tablename__ = 'post_share'
+    id = db.Column(db.Integer, primary_key=True)
+    sharer_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    shared_post_id = db.Column(db.Integer, db.ForeignKey('post.id'))
+
+
 class Post(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(100), nullable=False)
+    title = db.Column(db.String(2000), nullable=False)
     date_posted = db.Column(db.DateTime, nullable=True, index=True, default=datetime.utcnow)
     content = db.Column(db.Text)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     photo = db.Column(db.String(20), nullable=False, default='typography.jpg')
-    language = db.Column(db.String(5))
-
-
+    shares = db.relationship('PostShare', foreign_keys='PostShare.shared_post_id', backref='post', lazy='dynamic')
+    private = db.Column(db.Boolean, default=False, nullable=True)
+    date_shared = db.Column(db.DateTime, nullable=True)
 
     def __repr__(self):
         return f"Post('{self.title}', '{self.date_posted}', '{self.photo}')"
 
 
-
-
 db.create_all()
-
-
-
 
 
 class RegistrationForm(FlaskForm):
@@ -132,22 +152,26 @@ class RegistrationForm(FlaskForm):
                                      validators=[DataRequired(), EqualTo('password')])
     submit = SubmitField('Sign Up')
 
+
     def validate_username(self, username):
         user = User.query.filter_by(username=username.data).first()
         if user:
-            raise ValidationError('That username is taken. Please choose a different one.')
+            raise ValidationError('Это имя занято. Пожалуйста, выберите другое.')
+
 
     def validate_email(self, email):
         user = User.query.filter_by(email=email.data).first()
         if user:
-            raise ValidationError('That email is taken. Please choose a different one.')
+            raise ValidationError('Это email занят. Пожалуйста, выберите другой.')
+
 
 class PostForm(FlaskForm):
     title = StringField('Title', validators=[DataRequired()])
-    #post = TextAreaField(_l('Say something'), validators=[DataRequired()])
     content = TextAreaField('Content', validators=[DataRequired()])
     picture = FileField('Изменить изображение Поста', validators=[FileAllowed(['jpg', 'png'])])
+    private = BooleanField('Make Private')
     submit = SubmitField('Post')
+
 
 class LoginForm(FlaskForm):
     email = StringField('Email',
@@ -157,7 +181,7 @@ class LoginForm(FlaskForm):
     submit = SubmitField('Войти')
 
 
-#*
+
 class EditProfileForm(FlaskForm):
     username = StringField(_l('Username'), validators=[DataRequired()])
     about_me = TextAreaField(_l('About me'),
@@ -172,9 +196,7 @@ class EditProfileForm(FlaskForm):
         if username.data != self.original_username:
             user = User.query.filter_by(username=self.username.data).first()
             if user is not None:
-                raise ValidationError(_('Please use a different username.'))
-
-
+                raise ValidationError(_('Пожалуйста, используйте другое имя пользователя.'))
 
 
 class UpdateAccountForm(FlaskForm):
@@ -186,11 +208,13 @@ class UpdateAccountForm(FlaskForm):
     picture = FileField('Изменить изображение профиля', validators=[FileAllowed(['jpg', 'png'])])
     submit = SubmitField('Обновить')
 
+
     def validate_username(self, username):
         if username.data != current_user.username:
             user = User.query.filter_by(username=username.data).first()
             if user:
                 raise ValidationError('Это имя занято. Пожалуйста, выберите другой.')
+
 
     def validate_email(self, email):
         if email.data != current_user.email:
@@ -203,30 +227,13 @@ class EmptyForm(FlaskForm):
     submit = SubmitField('Submit')
 
 
-
-class SecureModelView(ModelView):
-    def is_accessible(self):
-        if "logged_in" in session:
-            return True
-        else:
-            abort(403)
-
-def validate_image(stream):
-    header = stream.read(512)
-    stream.seek(0)
-    format = imghdr.what(None, header)
-    if not format:
-        return None
-    return '.' + (format if format != 'jpeg' else 'jpg')
-
-
 @app.route('/user/<username>')
 @login_required
 def user(username):
     user = User.query.filter_by(username=username).first_or_404()
     page = request.args.get('page', 1, type=int)
     posts = user.posts.order_by(Post.date_posted.desc()).paginate(
-        page, app.config['POSTS_PER_PAGE'], False)
+        page)
     next_url = url_for('user', username=user.username, page=posts.next_num) \
         if posts.has_next else None
     prev_url = url_for('user', username=user.username, page=posts.prev_num) \
@@ -247,16 +254,11 @@ def register():
         user = User(username=form.username.data, email=form.email.data, password=hashed_password)
         db.session.add(user)
         db.session.commit()
-        flash('Your account has been created! You are now able to log in', 'success')
+        flash('Ваша учетная запись создана! Теперь вы можете войти в систему', 'Отлично!')
         return redirect(url_for('login'))
     return render_template('register.html', title='Register', form=form)
 
-@app.before_request
-def before_request():
-    if current_user.is_authenticated:
-        current_user.last_seen = datetime.utcnow()
-        db.session.commit()
-    g.locale = str(get_locale())
+
 
 @app.route("/home")
 def home():
@@ -280,7 +282,7 @@ def index():
         return redirect(url_for('index'))
     page = request.args.get('page', 1, type=int)
     posts = current_user.followed_posts().paginate(
-        page, app.config['POSTS_PER_PAGE'] , False)
+        page)
     next_url = url_for('index', page=posts.next_num) \
         if posts.has_next else None
     prev_url = url_for('index', page=posts.prev_num) \
@@ -303,6 +305,7 @@ def explore():
                            posts=posts.items, next_url=next_url,
                            prev_url=prev_url)
 
+
 @app.route('/edit_profile', methods=['GET', 'POST'])
 @login_required
 def edit_profile():
@@ -316,7 +319,6 @@ def edit_profile():
         form.about_me.data = current_user.about_me
     return render_template('edit_profile.html', title=_('Edit Profile'),
                            form=form)
-
 
 
 @app.route('/follow/<username>', methods=['POST'])
@@ -333,7 +335,7 @@ def follow(username):
             return redirect(url_for('user', username=username))
         current_user.follow(user)
         db.session.commit()
-        flash(_('You are following %(username)s!', username=username))
+        flash(_('Ты Подписался %(username)s!', username=username))
         return redirect(url_for('user', username=username))
     else:
         return redirect(url_for('index'))
@@ -349,14 +351,16 @@ def unfollow(username):
             flash(_('User %(username)s not found.', username=username))
             return redirect(url_for('index'))
         if user == current_user:
-            flash(_('You cannot unfollow yourself!'))
+            flash(_('Вы не можете отписаться от себя!'))
             return redirect(url_for('user', username=username))
         current_user.unfollow(user)
         db.session.commit()
-        flash(_('You are not following %(username)s.', username=username))
+        flash(_('Вы не подписаны %(username)s.', username=username))
         return redirect(url_for('user', username=username))
     else:
         return redirect(url_for('index'))
+
+
 
 
 @app.route("/login", methods=['GET', 'POST'])
@@ -371,7 +375,7 @@ def login():
             next_page = request.args.get('next')
             return redirect(next_page) if next_page else redirect(url_for('home'))
         else:
-            flash('Login Unsuccessful. Please check email and password', 'danger')
+            flash('Войти не удалось. Пожалуйста, проверьте электронную почту и пароль', 'Опасность')
     return render_template('login.html', title='Login', form=form)
 
 
@@ -396,30 +400,17 @@ def save_picture(form_picture):
 
 
 
-
-
-
-
-
-
-
-
-@app.route('/users/<id>', methods=['DELETE', 'GET'] )
+@app.route('/user/<id>/delete', methods=['DELETE', 'GET', 'POST'])
+@login_required
 def delete_user(id):
-    user1 = User.query.filter_by().first()
-
-    try:
-        db.session.delete(user1)
-        db.session.commit()
-        return redirect('/login', id=id)
-    except:
-        return 'There was a problem deleting that task'
+    user = User.query.get_or_404(id)
+    db.session.delete(user)
+    db.session.commit()
+    return redirect(url_for('Home', user=user))
 
 
 
-@app.errorhandler(413)
-def too_large(e):
-    return "File is too large", 413
+
 
 
 
@@ -465,12 +456,68 @@ def new_post():
                            form=form, legend='New Post', photo=photo)
 
 
+@app.route("/user/<string:username>")
+def user_posts(username):
+    page = request.args.get('page', 1, type=int)
+    user = User.query.filter_by(username=username).first_or_404()
+    posts = Post.query.filter_by(author=user)\
+        .order_by(Post.date_posted.desc())\
+        .paginate(page=page, per_page=5)
+    return render_template('user_posts.html', posts=posts, user=user)
 
 
-@app.route("/post/<int:post_id>")
+@app.route('/underground', methods=['GET', 'POST'])
+@login_required
+def underground():
+    postForm = PostForm()
+    if postForm.validate_on_submit():
+        post = Post(private=postForm.private.data, content=postForm.content.data, author=current_user)
+        db.session.add(post)
+        db.session.commit()
+        flash('Post Created!', 'success')
+        return redirect(request.referrer)
+    page = request.args.get('page', 1, type=int)
+    shared_posts = Post.query.filter(Post.shares)
+    private_posts = Post.query.filter_by(private=True)
+    posts = shared_posts.union(private_posts).order_by(Post.date_posted.desc(), Post.date_shared.desc()).paginate(
+        page=page, per_page=5)
+    return render_template('underground.html', title="Underground Feed", postForm=postForm, posts=posts)
+
+
+@app.route('/burrow', methods=['GET', 'POST'])
+@login_required
+def burrow():
+    postForm = PostForm()
+    if postForm.validate_on_submit():
+        post = Post(private=postForm.private.data, content=postForm.content.data, author=current_user)
+        db.session.add(post)
+        db.session.commit()
+        flash('Post Created!', 'success')
+    page = request.args.get('page', 1, type=int)
+    user = User.query.filter_by(username=current_user.username).first_or_404()
+    posts = user.followed_posts().paginate(page=page, per_page=5)
+    return render_template('burrow.html', postForm=postForm, title="My Burrow", posts=posts)
+
+@app.route('/post/share/<int:post_id>')
+@login_required
+def share_post(post_id):
+    post = Post.query.get_or_404(post_id)
+    if post.author == current_user:
+        flash('You can\'t share your own post', 'info')
+        return redirect(request.referrer)
+    if current_user.has_shared_post(post):
+        flash('You have already shared this post', 'info')
+        return redirect(request.referrer)
+    current_user.share_post(post)
+    post.date_shared = datetime.now()
+    db.session.commit()
+    flash('Сообщение было отправлено', 'Отлично!')
+    return redirect(url_for('underground'))
+
+
+@app.route("/post/<int:post_id>", methods=['GET', 'POST'])
 def post(post_id):
     post = Post.query.get_or_404(post_id)
-
     return render_template('post.html', title=post.title, post=post)
 
 
@@ -491,7 +538,7 @@ def update_post(post_id):
         post.title = form.title.data
         post.content = form.content.data
         db.session.commit()
-        flash('Your post has been updated!', 'success')
+        flash('Ваш пост обновлен!', 'Отлично')
         return redirect(url_for('post', post_id=post.id))
     elif request.method == 'GET':
         form.title.data = post.title
@@ -509,7 +556,7 @@ def delete_post(post_id):
         abort(403)
     db.session.delete(post)
     db.session.commit()
-    flash('Your post has been deleted!', 'success')
+    flash('Ваш пост был удален!', 'Успех!')
     return redirect(url_for('home'))
 
 
